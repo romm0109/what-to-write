@@ -16,12 +16,12 @@ Rules:
 - One message per option`;
 
 const execFileAsync = promisify(execFile);
+type CliProvider = 'crush' | 'gemini';
 
 @Injectable()
 export class GenerateService {
   private readonly logger = new Logger(GenerateService.name);
-  private readonly geminiCliPath = process.env.GEMINI_CLI_PATH ?? 'gemini';
-  private readonly geminiModel = process.env.GEMINI_MODEL;
+  private readonly cliProvider = this.resolveCliProvider();
 
   constructor(
     private readonly ragService: RagService,
@@ -29,13 +29,13 @@ export class GenerateService {
   ) {}
 
   async summarizeProfile(profile: string): Promise<string> {
-    return this.runGemini(
+    return this.runModel(
       `Summarize this dating profile in 6–8 words capturing the person's vibe:\n\n${profile}`,
     );
   }
 
-  async callGemini(userPrompt: string): Promise<string> {
-    return this.runGemini(userPrompt, SYSTEM_INSTRUCTION);
+  async callModel(userPrompt: string): Promise<string> {
+    return this.runModel(userPrompt, SYSTEM_INSTRUCTION);
   }
 
   async generate(profile: string, name?: string): Promise<{ suggestions: string[] }> {
@@ -53,24 +53,29 @@ export class GenerateService {
     ]);
 
     const prompt = this.buildPrompt(profile, name, relevantAdvice, pastSuccesses, pastMistakes);
-    const raw = await this.callGemini(prompt);
+    const raw = await this.callModel(prompt);
 
     return { suggestions: this.parseSuggestions(raw.trim()) };
   }
 
-  private async runGemini(prompt: string, systemInstruction?: string): Promise<string> {
+  private resolveCliProvider(): CliProvider {
+    const provider = (process.env.LLM_CLI_PROVIDER ?? 'crush').trim().toLowerCase();
+    if (provider === 'crush' || provider === 'gemini') {
+      return provider;
+    }
+
+    throw new Error(`Unsupported LLM_CLI_PROVIDER "${provider}". Use "crush" or "gemini".`);
+  }
+
+  private async runModel(prompt: string, systemInstruction?: string): Promise<string> {
     const fullPrompt = systemInstruction
       ? `${systemInstruction}\n\n${prompt}`
       : prompt;
 
-    const args = ['-p', fullPrompt, '-o', 'text'];
-    if (this.geminiModel) {
-      args.unshift(this.geminiModel);
-      args.unshift('--model');
-    }
+    const { command, args } = this.buildCliCommand(fullPrompt);
 
     try {
-      const { stdout, stderr } = await execFileAsync(this.geminiCliPath, args, {
+      const { stdout, stderr } = await execFileAsync(command, args, {
         env: process.env,
         maxBuffer: 1024 * 1024 * 8,
         timeout: 60000,
@@ -78,12 +83,12 @@ export class GenerateService {
 
       const output = stdout.trim();
       if (!output) {
-        throw new Error(stderr.trim() || 'Gemini CLI returned empty output');
+        throw new Error(stderr.trim() || `${this.cliProvider} CLI returned empty output`);
       }
 
       return output;
     } catch (error) {
-      this.logger.error('Gemini CLI call failed', error as Error);
+      this.logger.error(`${this.cliProvider} CLI call failed`, error as Error);
 
       const message = error instanceof Error ? error.message : String(error);
       const stdout = typeof error === 'object' && error !== null && 'stdout' in error
@@ -94,18 +99,55 @@ export class GenerateService {
         : '';
       const combinedOutput = `${stdout}\n${stderr}\n${message}`;
 
-      if (combinedOutput.includes('Opening authentication page in your browser')) {
+      if (this.cliProvider === 'gemini' && combinedOutput.includes('Opening authentication page in your browser')) {
         throw new Error('Gemini CLI is not authenticated. Run `gemini` once in the terminal and sign in.');
       }
+      if (this.cliProvider === 'crush' && combinedOutput.includes('failed to start agent processing stream')) {
+        throw new Error('Crush CLI request failed. Check your network connection and Crush provider login/config.');
+      }
       if (message.includes('ENOENT')) {
-        throw new Error(`Gemini CLI was not found at "${this.geminiCliPath}". Install it or set GEMINI_CLI_PATH.`);
+        throw new Error(`${this.providerLabel()} CLI was not found at "${command}". Install it or set the configured CLI path env.`);
       }
       if (message.includes('timed out')) {
-        throw new Error('Gemini CLI timed out. If this is the first run, authenticate by running `gemini` once in the terminal.');
+        throw new Error(`${this.providerLabel()} CLI timed out.`);
       }
 
-      throw new Error(`Gemini CLI request failed: ${message}`);
+      throw new Error(`${this.providerLabel()} CLI request failed: ${message}`);
     }
+  }
+
+  private buildCliCommand(prompt: string): { command: string; args: string[] } {
+    if (this.cliProvider === 'crush') {
+      const command = process.env.CRUSH_CLI_PATH ?? 'crush';
+      const args = ['run', prompt];
+      const model = this.resolveCrushModel();
+      if (model) {
+        args.push('--model', model);
+      }
+      return { command, args };
+    }
+
+    const command = process.env.GEMINI_CLI_PATH ?? 'gemini';
+    const args = ['-p', prompt, '-o', 'text'];
+    const model = process.env.GEMINI_MODEL;
+    if (model) {
+      args.unshift(model);
+      args.unshift('--model');
+    }
+    return { command, args };
+  }
+
+  private resolveCrushModel(): string | undefined {
+    if (process.env.CRUSH_MODEL) return process.env.CRUSH_MODEL;
+    if (process.env.LLM_CLI_MODEL) return process.env.LLM_CLI_MODEL;
+    if (process.env.ZAI_MODEL) {
+      return process.env.ZAI_MODEL.includes('/') ? process.env.ZAI_MODEL : `zai/${process.env.ZAI_MODEL}`;
+    }
+    return undefined;
+  }
+
+  private providerLabel(): string {
+    return this.cliProvider === 'crush' ? 'Crush' : 'Gemini';
   }
 
   private buildPrompt(
