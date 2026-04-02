@@ -97,7 +97,7 @@ export class RagService implements OnModuleInit {
     const results = await this.db.knowledgeTable
       .search(vector)
       .limit(5)
-      .execute();
+      .toArray();
 
     return results.map((r: any) => r.text as string);
   }
