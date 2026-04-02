@@ -25,21 +25,20 @@ export class FeedbackService {
     ]);
   }
 
-  async getPositiveExamples(profileVector: number[], limit = 3): Promise<string> {
+  async getPositiveExamples(profileVector: number[], limit = 3): Promise<Array<{ profile: string; message: string }>> {
     const rows = await this.db.feedbackTable
       .search(profileVector)
       .limit(20)
       .toArray();
 
     const positives = rows.filter((r: any) => r.positive === 1).slice(0, limit);
-    if (positives.length === 0) return '';
+    if (positives.length === 0) return [];
 
     return positives
-      .map((r: any) => `Profile like: "${String(r.profile).slice(0, 120)}..." → Worked: "${r.message}"`)
-      .join('\n\n');
+      .map((r: any) => ({ profile: String(r.profile).slice(0, 120), message: r.message as string }));
   }
 
-  async getNegativeExamples(profileVector: number[], limit = 3): Promise<string> {
+  async getNegativeExamples(profileVector: number[], limit = 3): Promise<Array<{ message: string; reason: string }>> {
     const rows = await this.db.feedbackTable
       .search(profileVector)
       .limit(20)
@@ -48,10 +47,9 @@ export class FeedbackService {
     const negatives = rows
       .filter((r: any) => r.positive === 0 && r.reason && r.reason !== '')
       .slice(0, limit);
-    if (negatives.length === 0) return '';
+    if (negatives.length === 0) return [];
 
     return negatives
-      .map((r: any) => `"${r.message}" — Why it failed: "${r.reason}"`)
-      .join('\n\n');
+      .map((r: any) => ({ message: r.message as string, reason: r.reason as string }));
   }
 }

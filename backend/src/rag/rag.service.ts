@@ -90,15 +90,15 @@ export class RagService implements OnModuleInit {
     return Array.from(output.data) as number[];
   }
 
-  async retrieve(vector: number[]): Promise<string> {
+  async retrieve(vector: number[]): Promise<string[]> {
     const count = await this.db.knowledgeTable.countRows();
-    if (count === 0) return '';
+    if (count === 0) return [];
 
     const results = await this.db.knowledgeTable
       .search(vector)
       .limit(5)
       .execute();
 
-    return results.map((r: any) => r.text as string).join('\n\n---\n\n');
+    return results.map((r: any) => r.text as string);
   }
 }

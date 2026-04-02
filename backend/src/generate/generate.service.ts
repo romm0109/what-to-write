@@ -3,8 +3,16 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { RagService } from '../rag/rag.service';
 import { FeedbackService } from '../feedback/feedback.service';
 
-const SYSTEM_INSTRUCTION = `You are an expert dating coach who helps men craft genuine, engaging opening messages for dating apps.
-Your goal is to write messages that feel personal, natural, and spark real conversation.`;
+const SYSTEM_INSTRUCTION = `Write opening messages for dating apps.
+Rules:
+- Never compliment her looks
+- No puns
+- No exclamation marks
+- No generic questions (e.g. "How's your day?")
+- Do not open with Hey or Hi
+- 1–3 sentences max
+- Match her energy from the profile
+- One message per option`;
 
 @Injectable()
 export class GenerateService {
@@ -58,43 +66,37 @@ export class GenerateService {
   private buildPrompt(
     profile: string,
     name: string | undefined,
-    relevantAdvice: string,
-    pastSuccesses: string,
-    pastMistakes: string,
+    chunks: string[],
+    wins: Array<{ profile: string; message: string }>,
+    failures: Array<{ message: string; reason: string }>,
   ): string {
-    let prompt = '';
+    const parts: string[] = [];
 
-    if (relevantAdvice) {
-      prompt += `Relevant advice from your knowledge base:\n${relevantAdvice}\n\n`;
+    if (chunks.length > 0) {
+      parts.push(chunks.map(c => `— ${c}`).join('\n'));
     }
 
-    if (pastSuccesses) {
-      prompt += `Examples of messages that worked well for this user in the past:\n${pastSuccesses}\n\n`;
+    if (wins.length > 0) {
+      parts.push(wins.map(w => `Profile like: "${w.profile}" → Worked: "${w.message}"`).join('\n'));
     }
 
-    if (pastMistakes) {
-      prompt += `Messages this user found ineffective and why — avoid these patterns:\n${pastMistakes}\n\n`;
+    if (failures.length > 0) {
+      parts.push(failures.map(f => `"${f.message}" — Why it failed: "${f.reason}"`).join('\n'));
     }
 
-    prompt += `Here is her dating profile:\n${profile}`;
-    if (name) prompt += `\n\nHer name: ${name}`;
+    parts.push(`Profile:\n${profile}`);
+    if (name) parts.push(`Name: ${name}`);
 
-    prompt += `
-
-Generate exactly 3 distinct opening message options. Each should:
-- Reference something specific from her profile (never be generic)
-- Feel natural and conversational, not salesy
-- Be different from each other in tone or angle (e.g. playful, curious, direct)
-- Be short — 1 to 3 sentences max
+    parts.push(`Generate exactly 3 options.
 
 Detect the language from her profile and write all messages in that same language.
 
-Format your response exactly like this:
+Format:
 Option 1: [message]
 Option 2: [message]
-Option 3: [message]`;
+Option 3: [message]`);
 
-    return prompt;
+    return parts.join('\n\n');
   }
 
   private parseSuggestions(raw: string): string[] {
