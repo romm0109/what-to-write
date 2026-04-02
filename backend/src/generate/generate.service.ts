@@ -1,22 +1,39 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { RagService } from '../rag/rag.service';
 import { FeedbackService } from '../feedback/feedback.service';
 
-const execFileAsync = promisify(execFile);
+const SYSTEM_INSTRUCTION = `You are an expert dating coach who helps men craft genuine, engaging opening messages for dating apps.
+Your goal is to write messages that feel personal, natural, and spark real conversation.`;
 
 @Injectable()
 export class GenerateService {
   private readonly logger = new Logger(GenerateService.name);
+  private readonly genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  private readonly model = this.genAI.getGenerativeModel({
+    model: process.env.GEMINI_MODEL ?? 'gemini-2.0-flash',
+    systemInstruction: SYSTEM_INSTRUCTION,
+  });
 
   constructor(
     private readonly ragService: RagService,
     private readonly feedbackService: FeedbackService,
   ) {}
+
+  async summarizeProfile(profile: string): Promise<string> {
+    const summaryModel = this.genAI.getGenerativeModel({
+      model: process.env.GEMINI_MODEL ?? 'gemini-2.0-flash',
+    });
+    const result = await summaryModel.generateContent(
+      `Summarize this dating profile in 6–8 words capturing the person's vibe:\n\n${profile}`,
+    );
+    return result.response.text().trim();
+  }
+
+  async callGemini(userPrompt: string): Promise<string> {
+    const result = await this.model.generateContent(userPrompt);
+    return result.response.text();
+  }
 
   async generate(profile: string, name?: string): Promise<{ suggestions: string[] }> {
     const [relevantAdvice, pastSuccesses, pastMistakes] = await Promise.all([
@@ -26,22 +43,9 @@ export class GenerateService {
     ]);
 
     const prompt = this.buildPrompt(profile, name, relevantAdvice, pastSuccesses, pastMistakes);
+    const raw = await this.callGemini(prompt);
 
-    // Write to temp file — avoids shell escaping issues with long/multi-line prompts
-    const tmpFile = path.join(os.tmpdir(), `wtw-${Date.now()}.txt`);
-    fs.writeFileSync(tmpFile, prompt, 'utf-8');
-
-    try {
-      const { stdout } = await execFileAsync(
-        'gemini',
-        ['-p', `@${tmpFile}`],
-        { timeout: 60_000, cwd: os.tmpdir() },
-      );
-
-      return { suggestions: this.parseSuggestions(stdout.trim()) };
-    } finally {
-      fs.unlinkSync(tmpFile);
-    }
+    return { suggestions: this.parseSuggestions(raw.trim()) };
   }
 
   private buildPrompt(
@@ -51,8 +55,7 @@ export class GenerateService {
     pastSuccesses: string,
     pastMistakes: string,
   ): string {
-    let prompt = `You are an expert dating coach who helps men craft genuine, engaging opening messages for dating apps.
-Your goal is to write messages that feel personal, natural, and spark real conversation.\n\n`;
+    let prompt = '';
 
     if (relevantAdvice) {
       prompt += `Relevant advice from your knowledge base:\n${relevantAdvice}\n\n`;
