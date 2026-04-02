@@ -94,7 +94,7 @@ export class RagService implements OnModuleInit {
     return this.embedder;
   }
 
-  private async embed(text: string): Promise<number[]> {
+  async embed(text: string): Promise<number[]> {
     const embedder = await this.getEmbedder();
     const output = await embedder(text, { pooling: 'mean', normalize: true });
     return Array.from(output.data) as number[];
@@ -110,13 +110,11 @@ export class RagService implements OnModuleInit {
     return dot / (Math.sqrt(magA) * Math.sqrt(magB));
   }
 
-  async retrieve(query: string, topK = 5): Promise<string> {
+  async retrieve(queryVector: number[], topK = 5): Promise<string> {
     if (this.chunks.length === 0) return '';
 
-    const queryEmbedding = await this.embed(query);
-
     const scored = this.chunks
-      .map(chunk => ({ text: chunk.text, score: this.cosineSimilarity(queryEmbedding, chunk.embedding) }))
+      .map(chunk => ({ text: chunk.text, score: this.cosineSimilarity(queryVector, chunk.embedding) }))
       .sort((a, b) => b.score - a.score)
       .slice(0, topK);
 

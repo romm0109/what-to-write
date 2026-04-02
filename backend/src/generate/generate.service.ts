@@ -36,10 +36,17 @@ export class GenerateService {
   }
 
   async generate(profile: string, name?: string): Promise<{ suggestions: string[] }> {
+    const summary = await this.summarizeProfile(profile);
+
+    const [summaryVector, profileVector] = await Promise.all([
+      this.ragService.embed(summary),
+      this.ragService.embed(profile),
+    ]);
+
     const [relevantAdvice, pastSuccesses, pastMistakes] = await Promise.all([
-      this.ragService.retrieve(profile),
-      this.feedbackService.getPositiveExamples(3),
-      this.feedbackService.getNegativeExamples(3),
+      this.ragService.retrieve(summaryVector),
+      this.feedbackService.getPositiveExamples(profileVector),
+      this.feedbackService.getNegativeExamples(profileVector),
     ]);
 
     const prompt = this.buildPrompt(profile, name, relevantAdvice, pastSuccesses, pastMistakes);
