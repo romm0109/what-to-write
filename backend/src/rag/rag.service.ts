@@ -19,6 +19,7 @@ export class RagService implements OnModuleInit {
   async onModuleInit() {
     if (!fs.existsSync(this.pdfsDir)) fs.mkdirSync(this.pdfsDir, { recursive: true });
 
+    await this.db.ensureReady();
     const count = await this.db.knowledgeTable.countRows();
     if (count === 0) {
       const pdfFiles = fs.existsSync(this.pdfsDir)

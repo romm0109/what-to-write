@@ -10,4 +10,7 @@ async function bootstrap() {
   await app.listen(3000);
   console.log('Backend running on http://localhost:3000');
 }
-bootstrap();
+bootstrap().catch(error => {
+  console.error('Backend failed to start', error);
+  process.exit(1);
+});

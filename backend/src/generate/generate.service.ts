@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { RagService } from '../rag/rag.service';
 import { FeedbackService } from '../feedback/feedback.service';
 
@@ -14,14 +15,13 @@ Rules:
 - Match her energy from the profile
 - One message per option`;
 
+const execFileAsync = promisify(execFile);
+
 @Injectable()
 export class GenerateService {
   private readonly logger = new Logger(GenerateService.name);
-  private readonly genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  private readonly model = this.genAI.getGenerativeModel({
-    model: process.env.GEMINI_MODEL ?? 'gemini-2.0-flash',
-    systemInstruction: SYSTEM_INSTRUCTION,
-  });
+  private readonly geminiCliPath = process.env.GEMINI_CLI_PATH ?? 'gemini';
+  private readonly geminiModel = process.env.GEMINI_MODEL;
 
   constructor(
     private readonly ragService: RagService,
@@ -29,18 +29,13 @@ export class GenerateService {
   ) {}
 
   async summarizeProfile(profile: string): Promise<string> {
-    const summaryModel = this.genAI.getGenerativeModel({
-      model: process.env.GEMINI_MODEL ?? 'gemini-2.0-flash',
-    });
-    const result = await summaryModel.generateContent(
+    return this.runGemini(
       `Summarize this dating profile in 6–8 words capturing the person's vibe:\n\n${profile}`,
     );
-    return result.response.text().trim();
   }
 
   async callGemini(userPrompt: string): Promise<string> {
-    const result = await this.model.generateContent(userPrompt);
-    return result.response.text();
+    return this.runGemini(userPrompt, SYSTEM_INSTRUCTION);
   }
 
   async generate(profile: string, name?: string): Promise<{ suggestions: string[] }> {
@@ -61,6 +56,56 @@ export class GenerateService {
     const raw = await this.callGemini(prompt);
 
     return { suggestions: this.parseSuggestions(raw.trim()) };
+  }
+
+  private async runGemini(prompt: string, systemInstruction?: string): Promise<string> {
+    const fullPrompt = systemInstruction
+      ? `${systemInstruction}\n\n${prompt}`
+      : prompt;
+
+    const args = ['-p', fullPrompt, '-o', 'text'];
+    if (this.geminiModel) {
+      args.unshift(this.geminiModel);
+      args.unshift('--model');
+    }
+
+    try {
+      const { stdout, stderr } = await execFileAsync(this.geminiCliPath, args, {
+        env: process.env,
+        maxBuffer: 1024 * 1024 * 8,
+        timeout: 60000,
+      });
+
+      const output = stdout.trim();
+      if (!output) {
+        throw new Error(stderr.trim() || 'Gemini CLI returned empty output');
+      }
+
+      return output;
+    } catch (error) {
+      this.logger.error('Gemini CLI call failed', error as Error);
+
+      const message = error instanceof Error ? error.message : String(error);
+      const stdout = typeof error === 'object' && error !== null && 'stdout' in error
+        ? String(error.stdout ?? '')
+        : '';
+      const stderr = typeof error === 'object' && error !== null && 'stderr' in error
+        ? String(error.stderr ?? '')
+        : '';
+      const combinedOutput = `${stdout}\n${stderr}\n${message}`;
+
+      if (combinedOutput.includes('Opening authentication page in your browser')) {
+        throw new Error('Gemini CLI is not authenticated. Run `gemini` once in the terminal and sign in.');
+      }
+      if (message.includes('ENOENT')) {
+        throw new Error(`Gemini CLI was not found at "${this.geminiCliPath}". Install it or set GEMINI_CLI_PATH.`);
+      }
+      if (message.includes('timed out')) {
+        throw new Error('Gemini CLI timed out. If this is the first run, authenticate by running `gemini` once in the terminal.');
+      }
+
+      throw new Error(`Gemini CLI request failed: ${message}`);
+    }
   }
 
   private buildPrompt(
