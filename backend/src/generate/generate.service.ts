@@ -13,7 +13,8 @@ Rules:
 - Do not open with Hey or Hi
 - 1–3 sentences max
 - Match her energy from the profile
-- One message per option`;
+- One message per option
+- Be flirty and fun, but not cringey`;
 
 const execFileAsync = promisify(execFile);
 type CliProvider = 'crush' | 'gemini';
@@ -98,12 +99,17 @@ export class GenerateService {
         ? String(error.stderr ?? '')
         : '';
       const combinedOutput = `${stdout}\n${stderr}\n${message}`;
+      const trimmedStderr = stderr.trim();
+      const trimmedStdout = stdout.trim();
 
       if (this.cliProvider === 'gemini' && combinedOutput.includes('Opening authentication page in your browser')) {
         throw new Error('Gemini CLI is not authenticated. Run `gemini` once in the terminal and sign in.');
       }
       if (this.cliProvider === 'crush' && combinedOutput.includes('failed to start agent processing stream')) {
-        throw new Error('Crush CLI request failed. Check your network connection and Crush provider login/config.');
+        throw new Error(`Crush CLI request failed: ${trimmedStderr || trimmedStdout}`);
+      }
+      if (this.cliProvider === 'crush' && (combinedOutput.includes('lookup ') || combinedOutput.includes('dial tcp'))) {
+        throw new Error(`Crush CLI network error: ${trimmedStderr || trimmedStdout}`);
       }
       if (message.includes('ENOENT')) {
         throw new Error(`${this.providerLabel()} CLI was not found at "${command}". Install it or set the configured CLI path env.`);
@@ -112,18 +118,19 @@ export class GenerateService {
         throw new Error(`${this.providerLabel()} CLI timed out.`);
       }
 
-      throw new Error(`${this.providerLabel()} CLI request failed: ${message}`);
+      throw new Error(`${this.providerLabel()} CLI request failed: ${trimmedStderr || trimmedStdout || message}`);
     }
   }
 
   private buildCliCommand(prompt: string): { command: string; args: string[] } {
     if (this.cliProvider === 'crush') {
       const command = process.env.CRUSH_CLI_PATH ?? 'crush';
-      const args = ['run', prompt];
+      const args = ['run'];
       const model = this.resolveCrushModel();
       if (model) {
         args.push('--model', model);
       }
+      args.push(prompt);
       return { command, args };
     }
 
